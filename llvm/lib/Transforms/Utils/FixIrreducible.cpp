@@ -79,13 +79,12 @@
 // Limitation: The pass cannot handle switch statements and indirect
 //             branches. Both must be lowered to plain branches first.
 //
-// CallBr support: CallBr is handled as a more general branch instruction which
-// can have multiple successors. The pass redirects the edges to intermediate
-// target blocks that unconditionally branch to the original callbr target
-// blocks. This allows the control flow hub to know to which of the original
-// target blocks to jump to.
-// Example input CFG:
-//                        Entry (callbr)
+// CallBr and switch support: CallBr and switches are handled as a more general
+// branch instruction which can have multiple successors. The pass redirects the
+// edges to intermediate target blocks that unconditionally branch to the
+// original target blocks. This allows the control flow hub to know to which of
+// the original target blocks to jump to. Example input CFG:
+//                        Entry (callbr/switch)
 //                       /     \
 //                      v       v
 //                      H ----> B
@@ -95,7 +94,7 @@
 //                             Exit
 //
 // becomes:
-//                        Entry (callbr)
+//                        Entry (callbr/switch)
 //                       /     \
 //                      v       v
 //                 target.H   target.B
@@ -110,7 +109,7 @@
 // Note
 // OUTPUT CFG: Converted to a natural loop with a new header N.
 //
-//                        Entry (callbr)
+//                        Entry (callbr/switch)
 //                       /     \
 //                      v       v
 //                 target.H   target.B
@@ -302,12 +301,14 @@ static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
                         << " -> " << printBasicBlock(Succ0)
                         << (Succ0 && Succ1 ? " " : "") << printBasicBlock(Succ1)
                         << '\n');
-    } else if (CallBrInst *CallBr = dyn_cast<CallBrInst>(P->getTerminator())) {
-      for (unsigned I = 0; I < CallBr->getNumSuccessors(); ++I) {
-        BasicBlock *Succ = CallBr->getSuccessor(I);
+    } else if (isa<CallBrInst>(P->getTerminator()) ||
+               isa<SwitchInst>(P->getTerminator())) {
+      Instruction *Term = P->getTerminator();
+      for (unsigned I = 0; I < Term->getNumSuccessors(); ++I) {
+        BasicBlock *Succ = Term->getSuccessor(I);
         if (Succ != Header)
           continue;
-        BasicBlock *NewSucc = SplitCallBrEdge(P, Succ, I, &DTU, &CI, LI);
+        BasicBlock *NewSucc = SplitMultiBrEdge(P, Succ, I, &DTU, &CI, LI);
         CHub.addBranch(NewSucc, Succ);
         LLVM_DEBUG(dbgs() << "Added internal branch: "
                           << printBasicBlock(NewSucc) << " -> "
@@ -340,12 +341,14 @@ static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
                         << " -> " << printBasicBlock(Succ0)
                         << (Succ0 && Succ1 ? " " : "") << printBasicBlock(Succ1)
                         << '\n');
-    } else if (CallBrInst *CallBr = dyn_cast<CallBrInst>(P->getTerminator())) {
-      for (unsigned I = 0; I < CallBr->getNumSuccessors(); ++I) {
-        BasicBlock *Succ = CallBr->getSuccessor(I);
+    } else if (isa<CallBrInst>(P->getTerminator()) ||
+               isa<SwitchInst>(P->getTerminator())) {
+      Instruction *Term = P->getTerminator();
+      for (unsigned I = 0; I < Term->getNumSuccessors(); ++I) {
+        BasicBlock *Succ = Term->getSuccessor(I);
         if (!C.contains(Succ))
           continue;
-        BasicBlock *NewSucc = SplitCallBrEdge(P, Succ, I, &DTU, &CI, LI);
+        BasicBlock *NewSucc = SplitMultiBrEdge(P, Succ, I, &DTU, &CI, LI);
         CHub.addBranch(NewSucc, Succ);
         LLVM_DEBUG(dbgs() << "Added external branch: "
                           << printBasicBlock(NewSucc) << " -> "

@@ -691,16 +691,17 @@ BasicBlock *llvm::SplitEdge(BasicBlock *BB, BasicBlock *Succ, DominatorTree *DT,
 }
 
 /// Helper function to update the cycle or loop information after inserting a
-/// new block between a callbr instruction and one of its target blocks.  Adds
-/// the new block to the innermost cycle or loop that the callbr instruction and
-/// the original target block share.
-/// \p LCI            cycle or loop information to update
-/// \p CallBrBlock    block containing the callbr instruction
-/// \p CallBrTarget   new target block of the callbr instruction
-/// \p Succ           original target block of the callbr instruction
+/// new block between a terminator instruction and one of its target blocks.
+/// Adds the new block to the innermost cycle or loop that the terminator
+/// instruction and the original target block share.
+/// \p LCI              cycle or loop information to update
+/// \p TerminatorBlock  block containing the terminator instruction with
+///                     multiple successors.
+/// \p Target           new target block of the terminator instruction
+/// \p Succ             original target block of the terminator instruction
 template <typename TI, typename T>
-static bool updateCycleLoopInfo(TI *LCI, BasicBlock *CallBrBlock,
-                                BasicBlock *CallBrTarget, BasicBlock *Succ) {
+static bool updateCycleLoopInfo(TI *LCI, BasicBlock *TerminatorBlock,
+                                BasicBlock *Target, BasicBlock *Succ) {
   static_assert(std::is_same_v<TI, CycleInfo> || std::is_same_v<TI, LoopInfo>,
                 "type must be CycleInfo or LoopInfo");
   if (!LCI)
@@ -708,61 +709,61 @@ static bool updateCycleLoopInfo(TI *LCI, BasicBlock *CallBrBlock,
 
   T *LC;
   if constexpr (std::is_same_v<TI, CycleInfo>)
-    LC = LCI->getSmallestCommonCycle(CallBrBlock, Succ);
+    LC = LCI->getSmallestCommonCycle(TerminatorBlock, Succ);
   else
-    LC = LCI->getSmallestCommonLoop(CallBrBlock, Succ);
+    LC = LCI->getSmallestCommonLoop(TerminatorBlock, Succ);
   if (!LC)
     return false;
 
   if constexpr (std::is_same_v<TI, CycleInfo>)
-    LCI->addBlockToCycle(CallBrTarget, LC);
+    LCI->addBlockToCycle(Target, LC);
   else
-    LC->addBasicBlockToLoop(CallBrTarget, *LCI);
+    LC->addBasicBlockToLoop(Target, *LCI);
 
   return true;
 }
 
-BasicBlock *llvm::SplitCallBrEdge(BasicBlock *CallBrBlock, BasicBlock *Succ,
-                                  unsigned SuccIdx, DomTreeUpdater *DTU,
-                                  CycleInfo *CI, LoopInfo *LI,
-                                  bool *UpdatedLI) {
-  CallBrInst *CallBr = dyn_cast<CallBrInst>(CallBrBlock->getTerminator());
-  assert(CallBr && "expected callbr terminator");
-  assert(SuccIdx < CallBr->getNumSuccessors() &&
-         Succ == CallBr->getSuccessor(SuccIdx) && "invalid successor index");
+BasicBlock *llvm::SplitMultiBrEdge(BasicBlock *MultiBrBlock, BasicBlock *Succ,
+                                   unsigned SuccIdx, DomTreeUpdater *DTU,
+                                   CycleInfo *CI, LoopInfo *LI,
+                                   bool *UpdatedLI) {
+  Instruction *Term = MultiBrBlock->getTerminator();
+  assert(Term && "expected terminator");
+  assert(SuccIdx < Term->getNumSuccessors() &&
+         Succ == Term->getSuccessor(SuccIdx) && "invalid successor index");
 
-  // Create a new block between callbr and the specified successor.
+  // Create a new block between terminator and the specified successor.
   // splitBlockBefore cannot be re-used here since it cannot split if the split
   // point is a PHI node (because BasicBlock::splitBasicBlockBefore cannot
   // handle that). But we don't need to rewire every part of a potential PHI
-  // node. We only care about the edge between CallBrBlock and the original
+  // node. We only care about the edge between MultiBrBlock and the original
   // successor.
-  BasicBlock *CallBrTarget =
-      BasicBlock::Create(CallBrBlock->getContext(),
-                         CallBrBlock->getName() + ".target." + Succ->getName(),
-                         CallBrBlock->getParent());
+  BasicBlock *BrTarget =
+      BasicBlock::Create(MultiBrBlock->getContext(),
+                         MultiBrBlock->getName() + ".target." + Succ->getName(),
+                         MultiBrBlock->getParent());
   // Rewire control flow from the new target block to the original successor.
-  Succ->replacePhiUsesWith(CallBrBlock, CallBrTarget);
-  // Rewire control flow from callbr to the new target block.
-  CallBr->setSuccessor(SuccIdx, CallBrTarget);
+  Succ->replacePhiUsesWith(MultiBrBlock, BrTarget);
+  // Rewire control flow from terminator to the new target block.
+  Term->setSuccessor(SuccIdx, BrTarget);
   // Jump from the new target block to the original successor.
-  BranchInst::Create(Succ, CallBrTarget);
+  BranchInst::Create(Succ, BrTarget);
 
   bool Updated =
-      updateCycleLoopInfo<LoopInfo, Loop>(LI, CallBrBlock, CallBrTarget, Succ);
+      updateCycleLoopInfo<LoopInfo, Loop>(LI, MultiBrBlock, BrTarget, Succ);
   if (UpdatedLI)
     *UpdatedLI = Updated;
-  updateCycleLoopInfo<CycleInfo, Cycle>(CI, CallBrBlock, CallBrTarget, Succ);
+  updateCycleLoopInfo<CycleInfo, Cycle>(CI, MultiBrBlock, BrTarget, Succ);
   if (DTU) {
-    DTU->applyUpdates({{DominatorTree::Insert, CallBrBlock, CallBrTarget}});
-    if (DTU->getDomTree().dominates(CallBrBlock, Succ)) {
-      if (!is_contained(successors(CallBrBlock), Succ))
-        DTU->applyUpdates({{DominatorTree::Delete, CallBrBlock, Succ}});
-      DTU->applyUpdates({{DominatorTree::Insert, CallBrTarget, Succ}});
+    DTU->applyUpdates({{DominatorTree::Insert, MultiBrBlock, BrTarget}});
+    if (DTU->getDomTree().dominates(MultiBrBlock, Succ)) {
+      if (!is_contained(successors(MultiBrBlock), Succ))
+        DTU->applyUpdates({{DominatorTree::Delete, MultiBrBlock, Succ}});
+      DTU->applyUpdates({{DominatorTree::Insert, BrTarget, Succ}});
     }
   }
 
-  return CallBrTarget;
+  return BrTarget;
 }
 
 void llvm::setUnwindEdgeTo(Instruction *TI, BasicBlock *Succ) {
