@@ -13,6 +13,7 @@
 #ifndef LLVM_TRANSFORMS_UTILS_CONTROLFLOWUTILS_H
 #define LLVM_TRANSFORMS_UTILS_CONTROLFLOWUTILS_H
 
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/CycleInfo.h"
@@ -97,7 +98,19 @@ class DomTreeUpdater;
 ///    for the caller to accomplish, since each specific use of this function
 ///    may have additional information which simplifies this fixup. For example,
 ///    see restoreSSA() in the UnifyLoopExits pass.
-struct ControlFlowHub {
+class ControlFlowHub {
+  BasicBlock *finalizeAsBrSled(DomTreeUpdater *DTU,
+                               SmallVectorImpl<BasicBlock *> &GuardBlocks,
+                               const StringRef Prefix,
+                               std::optional<unsigned> MaxControlFlowBooleans,
+                               SetVector<BasicBlock *> &Outgoing);
+
+  BasicBlock *finalizeAsSwitch(DomTreeUpdater *DTU,
+                               SmallVectorImpl<BasicBlock *> &GuardBlocks,
+                               const StringRef Prefix,
+                               SetVector<BasicBlock *> &Outgoing);
+
+public:
   struct BranchDescriptor {
     BasicBlock *BB;
     BasicBlock *Succ0;
@@ -119,7 +132,8 @@ struct ControlFlowHub {
   std::pair<BasicBlock *, bool>
   finalize(DomTreeUpdater *DTU, SmallVectorImpl<BasicBlock *> &GuardBlocks,
            const StringRef Prefix,
-           std::optional<unsigned> MaxControlFlowBooleans = std::nullopt);
+           std::optional<unsigned> MaxControlFlowBooleans = std::nullopt,
+           bool GenerateSwitches = false);
 
   SmallVector<BranchDescriptor> Branches;
 };

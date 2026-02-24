@@ -14,7 +14,9 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -272,29 +274,10 @@ static void reconnectPhis(BasicBlock *Out, BasicBlock *GuardBlock,
   }
 }
 
-std::pair<BasicBlock *, bool> ControlFlowHub::finalize(
+BasicBlock *ControlFlowHub::finalizeAsBrSled(
     DomTreeUpdater *DTU, SmallVectorImpl<BasicBlock *> &GuardBlocks,
-    const StringRef Prefix, std::optional<unsigned> MaxControlFlowBooleans) {
-#ifndef NDEBUG
-  SmallPtrSet<BasicBlock *, 8> Incoming;
-#endif
-  SetVector<BasicBlock *> Outgoing;
-
-  for (auto [BB, Succ0, Succ1] : Branches) {
-#ifndef NDEBUG
-    assert(
-        (Incoming.insert(BB).second || isa<CallBrInst>(BB->getTerminator())) &&
-        "Duplicate entry for incoming block.");
-#endif
-    if (Succ0)
-      Outgoing.insert(Succ0);
-    if (Succ1)
-      Outgoing.insert(Succ1);
-  }
-
-  if (Outgoing.size() < 2)
-    return {Outgoing.front(), false};
-
+    const StringRef Prefix, std::optional<unsigned> MaxControlFlowBooleans,
+    SetVector<BasicBlock *> &Outgoing) {
   SmallVector<DominatorTree::UpdateType, 16> Updates;
   if (DTU) {
     for (auto [BB, Succ0, Succ1] : Branches) {
@@ -341,6 +324,94 @@ std::pair<BasicBlock *, bool> ControlFlowHub::finalize(
       if (auto *Inst = dyn_cast_or_null<Instruction>(I))
         Inst->eraseFromParent();
   }
+  return FirstGuardBlock;
+}
 
-  return {FirstGuardBlock, true};
+BasicBlock *ControlFlowHub::finalizeAsSwitch(
+    DomTreeUpdater *DTU, SmallVectorImpl<BasicBlock *> &GuardBlocks,
+    const StringRef Prefix, SetVector<BasicBlock *> &Outgoing) {
+  SmallVector<DominatorTree::UpdateType, 16> Updates;
+  if (DTU) {
+    for (auto [BB, Succ0, Succ1] : Branches) {
+      if (Succ0)
+        Updates.push_back({DominatorTree::Delete, BB, Succ0});
+      if (Succ1)
+        Updates.push_back({DominatorTree::Delete, BB, Succ1});
+    }
+  }
+
+  Function *F = Outgoing.front()->getParent();
+  BasicBlock *Guard = BasicBlock::Create(F->getContext(), Prefix + ".guard", F);
+  GuardBlocks.push_back(Guard);
+  Type *Int32Ty = Type::getInt32Ty(F->getContext());
+  IRBuilder<> Builder(Guard);
+  auto *Phi = Builder.CreatePHI(Int32Ty, Branches.size(), "merged.bb.idx");
+  for (auto [BB, Succ0, Succ1] : Branches) {
+    Value *Condition = redirectToHub(BB, Succ0, Succ1, Guard);
+    Value *IncomingId = nullptr;
+
+    if (Succ0 && Succ1) {
+      Value *Id0 = ConstantInt::get(
+          Int32Ty, std::distance(Outgoing.begin(), find(Outgoing, Succ0)));
+      Value *Id1 = ConstantInt::get(
+          Int32Ty, std::distance(Outgoing.begin(), find(Outgoing, Succ1)));
+      IncomingId = SelectInst::Create(Condition, Id0, Id1, "target.bb.idx",
+                                      BB->getTerminator()->getIterator());
+    } else {
+      auto Succ = Succ0 ? Succ0 : Succ1;
+      uint64_t Idx = std::distance(Outgoing.begin(), find(Outgoing, Succ));
+      IncomingId = ConstantInt::get(Int32Ty, Idx);
+    }
+
+    Phi->addIncoming(IncomingId, BB);
+  }
+
+  BasicBlock *DefaultDest = Outgoing.front();
+  SwitchInst *SI = Builder.CreateSwitch(Phi, DefaultDest, Outgoing.size());
+  for (int I = 0, E = Outgoing.size(); I != E; ++I) {
+    SI->addCase(Builder.getInt32(I), Outgoing[I]);
+  }
+
+  if (DTU) {
+    for (auto [BB, Succ0, Succ1] : Branches)
+      Updates.push_back({DominatorTree::Insert, BB, Guard});
+
+    for (auto Outgoing : Outgoing)
+      Updates.push_back({DominatorTree::Insert, Guard, Outgoing});
+    DTU->applyUpdates(Updates);
+  }
+  return Guard;
+}
+
+std::pair<BasicBlock *, bool> ControlFlowHub::finalize(
+    DomTreeUpdater *DTU, SmallVectorImpl<BasicBlock *> &GuardBlocks,
+    const StringRef Prefix, std::optional<unsigned> MaxControlFlowBooleans,
+    bool GenerateSwitches) {
+#ifndef NDEBUG
+  SmallPtrSet<BasicBlock *, 8> Incoming;
+#endif
+  SetVector<BasicBlock *> Outgoing;
+
+  for (auto [BB, Succ0, Succ1] : Branches) {
+#ifndef NDEBUG
+    assert((Incoming.insert(BB).second ||
+            isa<CallBrInst>(BB->getTerminator()) ||
+            isa<SwitchInst>(BB->getTerminator())) &&
+           "Duplicate entry for incoming block.");
+#endif
+    if (Succ0)
+      Outgoing.insert(Succ0);
+    if (Succ1)
+      Outgoing.insert(Succ1);
+  }
+
+  if (Outgoing.size() < 2)
+    return {Outgoing.front(), false};
+
+  if (GenerateSwitches)
+    return {finalizeAsSwitch(DTU, GuardBlocks, Prefix, Outgoing), true};
+
+  return {finalizeAsBrSled(DTU, GuardBlocks, Prefix, MaxControlFlowBooleans,
+                           Outgoing),
+          true};
 }

@@ -136,15 +136,20 @@
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ControlFlowUtils.h"
+#include <optional>
 
 #define DEBUG_TYPE "fix-irreducible"
 
 using namespace llvm;
 
 namespace {
-struct FixIrreducible : public FunctionPass {
+class FixIrreducible : public FunctionPass {
+  bool GenerateSwitches;
+
+public:
   static char ID;
-  FixIrreducible() : FunctionPass(ID) {
+  explicit FixIrreducible(bool GenerateSwitches = false)
+      : FunctionPass(ID), GenerateSwitches(GenerateSwitches) {
     initializeFixIrreduciblePass(*PassRegistry::getPassRegistry());
   }
 
@@ -271,13 +276,13 @@ static void updateLoopInfo(LoopInfo &LI, Cycle &C,
 // Given a set of blocks and headers in an irreducible SCC, convert it into a
 // natural loop. Also insert this new loop at its appropriate place in the
 // hierarchy of loops.
-static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
-                           LoopInfo *LI) {
+static bool fixIrreducible(Function &F, Cycle &C, CycleInfo &CI,
+                           DominatorTree &DT, LoopInfo *LI,
+                           bool GenerateSwitches) {
   if (C.isReducible())
     return false;
   LLVM_DEBUG(dbgs() << "Processing cycle:\n" << CI.print(&C) << "\n";);
 
-  DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Eager);
   ControlFlowHub CHub;
   SetVector<BasicBlock *> Predecessors;
 
@@ -308,7 +313,7 @@ static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
         BasicBlock *Succ = Term->getSuccessor(I);
         if (Succ != Header)
           continue;
-        BasicBlock *NewSucc = SplitMultiBrEdge(P, Succ, I, &DTU, &CI, LI);
+        BasicBlock *NewSucc = SplitMultiBrEdge(P, Succ, I, nullptr, &CI, LI);
         CHub.addBranch(NewSucc, Succ);
         LLVM_DEBUG(dbgs() << "Added internal branch: "
                           << printBasicBlock(NewSucc) << " -> "
@@ -348,7 +353,7 @@ static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
         BasicBlock *Succ = Term->getSuccessor(I);
         if (!C.contains(Succ))
           continue;
-        BasicBlock *NewSucc = SplitMultiBrEdge(P, Succ, I, &DTU, &CI, LI);
+        BasicBlock *NewSucc = SplitMultiBrEdge(P, Succ, I, nullptr, &CI, LI);
         CHub.addBranch(NewSucc, Succ);
         LLVM_DEBUG(dbgs() << "Added external branch: "
                           << printBasicBlock(NewSucc) << " -> "
@@ -372,7 +377,8 @@ static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
   SetVector<BasicBlock *> Entries;
   Entries.insert(C.entry_rbegin(), C.entry_rend());
 
-  CHub.finalize(&DTU, GuardBlocks, "irr");
+  CHub.finalize(nullptr, GuardBlocks, "irr", std::nullopt, GenerateSwitches);
+  DT.recalculate(F);
 #if defined(EXPENSIVE_CHECKS)
   assert(DT.verify(DominatorTree::VerificationLevel::Full));
 #else
@@ -400,14 +406,14 @@ static bool fixIrreducible(Cycle &C, CycleInfo &CI, DominatorTree &DT,
 }
 
 static bool FixIrreducibleImpl(Function &F, CycleInfo &CI, DominatorTree &DT,
-                               LoopInfo *LI) {
+                               LoopInfo *LI, bool GenerateSwitches) {
   LLVM_DEBUG(dbgs() << "===== Fix irreducible control-flow in function: "
                     << F.getName() << "\n");
 
   bool Changed = false;
   for (Cycle *TopCycle : CI.toplevel_cycles()) {
     for (Cycle *C : depth_first(TopCycle)) {
-      Changed |= fixIrreducible(*C, CI, DT, LI);
+      Changed |= fixIrreducible(F, *C, CI, DT, LI, GenerateSwitches);
     }
   }
 
@@ -429,7 +435,7 @@ bool FixIrreducible::runOnFunction(Function &F) {
   LoopInfo *LI = LIWP ? &LIWP->getLoopInfo() : nullptr;
   auto &CI = getAnalysis<CycleInfoWrapperPass>().getResult();
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  return FixIrreducibleImpl(F, CI, DT, LI);
+  return FixIrreducibleImpl(F, CI, DT, LI, GenerateSwitches);
 }
 
 PreservedAnalyses FixIrreduciblePass::run(Function &F,
@@ -438,7 +444,7 @@ PreservedAnalyses FixIrreduciblePass::run(Function &F,
   auto &CI = AM.getResult<CycleAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
 
-  if (!FixIrreducibleImpl(F, CI, DT, LI))
+  if (!FixIrreducibleImpl(F, CI, DT, LI, GenerateSwitches))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;

@@ -12,7 +12,12 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
-struct FixIrreduciblePass : PassInfoMixin<FixIrreduciblePass> {
+class FixIrreduciblePass : public PassInfoMixin<FixIrreduciblePass> {
+  bool GenerateSwitches;
+
+public:
+  explicit FixIrreduciblePass(bool GenerateSwitches = false)
+      : GenerateSwitches(GenerateSwitches) {}
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 } // namespace llvm
