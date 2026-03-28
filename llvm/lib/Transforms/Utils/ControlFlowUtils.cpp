@@ -414,7 +414,7 @@ std::pair<BasicBlock *, bool> ControlFlowHub::finalize(
   if (Outgoing.size() < 2)
     return {Outgoing.front(), false};
 
-  if (GenerateSwitches)
+  if (GenerateSwitches && Outgoing.size() > 2)
     return {finalizeAsSwitch(DTU, GuardBlocks, Prefix, Outgoing), true};
 
   return {finalizeAsBrSled(DTU, GuardBlocks, Prefix, MaxControlFlowBooleans,

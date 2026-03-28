@@ -129,10 +129,10 @@
 
 #include "llvm/Transforms/Utils/FixIrreducible.h"
 #include "llvm/Analysis/CycleAnalysis.h"
-#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ControlFlowUtils.h"
@@ -142,14 +142,16 @@
 
 using namespace llvm;
 
+static cl::opt<bool>
+    GenerateGuardSwitches("fix-irreducible-guard-switches", cl::Hidden,
+                          cl::desc("Allow switches in guard blocks"),
+                          cl::init(false));
+
 namespace {
 class FixIrreducible : public FunctionPass {
-  bool GenerateSwitches;
-
 public:
   static char ID;
-  explicit FixIrreducible(bool GenerateSwitches = false)
-      : FunctionPass(ID), GenerateSwitches(GenerateSwitches) {
+  explicit FixIrreducible() : FunctionPass(ID) {
     initializeFixIrreduciblePass(*PassRegistry::getPassRegistry());
   }
 
@@ -422,14 +424,14 @@ static bool FixIrreducibleImpl(Function &F, CycleInfo &CI, LoopInfo *LI,
 
 bool FixIrreducible::runOnFunction(Function &F) {
   auto &CI = getAnalysis<CycleInfoWrapperPass>().getResult();
-  return FixIrreducibleImpl(F, CI, nullptr, GenerateSwitches);
+  return FixIrreducibleImpl(F, CI, nullptr, GenerateGuardSwitches);
 }
 
 PreservedAnalyses FixIrreduciblePass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
   auto &CI = AM.getResult<CycleAnalysis>(F);
 
-  if (!FixIrreducibleImpl(F, CI, nullptr, GenerateSwitches))
+  if (!FixIrreducibleImpl(F, CI, nullptr, GenerateGuardSwitches))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;
