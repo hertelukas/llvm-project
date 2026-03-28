@@ -366,17 +366,23 @@ BasicBlock *ControlFlowHub::finalizeAsSwitch(
     Phi->addIncoming(IncomingId, BB);
   }
 
-  BasicBlock *DefaultDest = Outgoing.front();
+  BasicBlock *DefaultDest =
+    BasicBlock::Create(F->getContext(), Prefix + ".guard.default", F);
+  IRBuilder<>(DefaultDest).CreateUnreachable();
   SwitchInst *SI = Builder.CreateSwitch(Phi, DefaultDest, Outgoing.size());
   for (int I = 0, E = Outgoing.size(); I != E; ++I) {
     SI->addCase(Builder.getInt32(I), Outgoing[I]);
+  }
+
+  for (BasicBlock *Out : Outgoing) {
+    reconnectPhis(Out, Guard, Branches, Guard);
   }
 
   if (DTU) {
     for (auto [BB, Succ0, Succ1] : Branches)
       Updates.push_back({DominatorTree::Insert, BB, Guard});
 
-    for (auto Outgoing : Outgoing)
+    for (auto *Outgoing : Outgoing)
       Updates.push_back({DominatorTree::Insert, Guard, Outgoing});
     DTU->applyUpdates(Updates);
   }
