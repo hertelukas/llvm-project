@@ -154,11 +154,8 @@ public:
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<CycleInfoWrapperPass>();
-    AU.addPreserved<DominatorTreeWrapperPass>();
     AU.addPreserved<CycleInfoWrapperPass>();
-    AU.addPreserved<LoopInfoWrapperPass>();
   }
 
   bool runOnFunction(Function &F) override;
@@ -276,8 +273,7 @@ static void updateLoopInfo(LoopInfo &LI, Cycle &C,
 // Given a set of blocks and headers in an irreducible SCC, convert it into a
 // natural loop. Also insert this new loop at its appropriate place in the
 // hierarchy of loops.
-static bool fixIrreducible(Function &F, Cycle &C, CycleInfo &CI,
-                           DominatorTree &DT, LoopInfo *LI,
+static bool fixIrreducible(Function &F, Cycle &C, CycleInfo &CI, LoopInfo *LI,
                            bool GenerateSwitches) {
   if (C.isReducible())
     return false;
@@ -378,12 +374,6 @@ static bool fixIrreducible(Function &F, Cycle &C, CycleInfo &CI,
   Entries.insert(C.entry_rbegin(), C.entry_rend());
 
   CHub.finalize(nullptr, GuardBlocks, "irr", std::nullopt, GenerateSwitches);
-  DT.recalculate(F);
-#if defined(EXPENSIVE_CHECKS)
-  assert(DT.verify(DominatorTree::VerificationLevel::Full));
-#else
-  assert(DT.verify(DominatorTree::VerificationLevel::Fast));
-#endif
 
   // If we are updating LoopInfo, do that now before modifying the cycle. This
   // ensures that the first guard block is the header of a new natural loop.
@@ -405,15 +395,15 @@ static bool fixIrreducible(Function &F, Cycle &C, CycleInfo &CI,
   return true;
 }
 
-static bool FixIrreducibleImpl(Function &F, CycleInfo &CI, DominatorTree &DT,
-                               LoopInfo *LI, bool GenerateSwitches) {
+static bool FixIrreducibleImpl(Function &F, CycleInfo &CI, LoopInfo *LI,
+                               bool GenerateSwitches) {
   LLVM_DEBUG(dbgs() << "===== Fix irreducible control-flow in function: "
                     << F.getName() << "\n");
 
   bool Changed = false;
   for (Cycle *TopCycle : CI.toplevel_cycles()) {
     for (Cycle *C : depth_first(TopCycle)) {
-      Changed |= fixIrreducible(F, *C, CI, DT, LI, GenerateSwitches);
+      Changed |= fixIrreducible(F, *C, CI, LI, GenerateSwitches);
     }
   }
 
@@ -431,25 +421,18 @@ static bool FixIrreducibleImpl(Function &F, CycleInfo &CI, DominatorTree &DT,
 }
 
 bool FixIrreducible::runOnFunction(Function &F) {
-  auto *LIWP = getAnalysisIfAvailable<LoopInfoWrapperPass>();
-  LoopInfo *LI = LIWP ? &LIWP->getLoopInfo() : nullptr;
   auto &CI = getAnalysis<CycleInfoWrapperPass>().getResult();
-  auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  return FixIrreducibleImpl(F, CI, DT, LI, GenerateSwitches);
+  return FixIrreducibleImpl(F, CI, nullptr, GenerateSwitches);
 }
 
 PreservedAnalyses FixIrreduciblePass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
-  auto *LI = AM.getCachedResult<LoopAnalysis>(F);
   auto &CI = AM.getResult<CycleAnalysis>(F);
-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
 
-  if (!FixIrreducibleImpl(F, CI, DT, LI, GenerateSwitches))
+  if (!FixIrreducibleImpl(F, CI, nullptr, GenerateSwitches))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;
-  PA.preserve<LoopAnalysis>();
   PA.preserve<CycleAnalysis>();
-  PA.preserve<DominatorTreeAnalysis>();
   return PA;
 }

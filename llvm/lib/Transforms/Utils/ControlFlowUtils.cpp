@@ -358,7 +358,7 @@ BasicBlock *ControlFlowHub::finalizeAsSwitch(
       IncomingId = SelectInst::Create(Condition, Id0, Id1, "target.bb.idx",
                                       BB->getTerminator()->getIterator());
     } else {
-      auto Succ = Succ0 ? Succ0 : Succ1;
+      auto *Succ = Succ0 ? Succ0 : Succ1;
       uint64_t Idx = std::distance(Outgoing.begin(), find(Outgoing, Succ));
       IncomingId = ConstantInt::get(Int32Ty, Idx);
     }
@@ -367,7 +367,7 @@ BasicBlock *ControlFlowHub::finalizeAsSwitch(
   }
 
   BasicBlock *DefaultDest =
-    BasicBlock::Create(F->getContext(), Prefix + ".guard.default", F);
+      BasicBlock::Create(F->getContext(), Prefix + ".guard.default", F);
   IRBuilder<>(DefaultDest).CreateUnreachable();
   SwitchInst *SI = Builder.CreateSwitch(Phi, DefaultDest, Outgoing.size());
   for (int I = 0, E = Outgoing.size(); I != E; ++I) {

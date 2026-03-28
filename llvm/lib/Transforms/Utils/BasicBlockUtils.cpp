@@ -749,8 +749,8 @@ BasicBlock *llvm::SplitMultiBrEdge(BasicBlock *MultiBrBlock, BasicBlock *Succ,
   // Jump from the new target block to the original successor.
   BranchInst::Create(Succ, BrTarget);
 
-  bool Updated =
-      updateCycleLoopInfo<LoopInfo, Loop>(LI, MultiBrBlock, BrTarget, Succ);
+  bool Updated = true;
+  updateCycleLoopInfo<LoopInfo, Loop>(LI, MultiBrBlock, BrTarget, Succ);
   if (UpdatedLI)
     *UpdatedLI = Updated;
   updateCycleLoopInfo<CycleInfo, Cycle>(CI, MultiBrBlock, BrTarget, Succ);
