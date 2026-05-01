@@ -431,7 +431,10 @@ PreservedAnalyses FixIrreduciblePass::run(Function &F,
                                           FunctionAnalysisManager &AM) {
   auto &CI = AM.getResult<CycleAnalysis>(F);
 
-  if (!FixIrreducibleImpl(F, CI, nullptr, GenerateGuardSwitches))
+  // Prioritze API decision
+  bool UseSwitches = GenerateSwitches.value_or(GenerateGuardSwitches);
+
+  if (!FixIrreducibleImpl(F, CI, nullptr, UseSwitches))
     return PreservedAnalyses::all();
 
   PreservedAnalyses PA;

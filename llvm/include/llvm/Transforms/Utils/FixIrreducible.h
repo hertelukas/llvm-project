@@ -10,13 +10,15 @@
 #define LLVM_TRANSFORMS_UTILS_FIXIRREDUCIBLE_H
 
 #include "llvm/IR/PassManager.h"
+#include <optional>
 
 namespace llvm {
 class FixIrreduciblePass : public PassInfoMixin<FixIrreduciblePass> {
-  bool GenerateSwitches;
+  std::optional<bool> GenerateSwitches;
 
 public:
-  explicit FixIrreduciblePass(bool GenerateSwitches = false)
+  explicit FixIrreduciblePass(
+      std::optional<bool> GenerateSwitches = std::nullopt)
       : GenerateSwitches(GenerateSwitches) {}
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
